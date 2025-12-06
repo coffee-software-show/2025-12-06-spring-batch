@@ -1,6 +1,9 @@
 package com.example.batch;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
+import org.springframework.aot.hint.RuntimeHints;
+import org.springframework.aot.hint.RuntimeHintsRegistrar;
 import org.springframework.batch.core.configuration.annotation.EnableJdbcJobRepository;
 import org.springframework.batch.core.configuration.support.JdbcDefaultBatchConfiguration;
 import org.springframework.batch.core.job.Job;
@@ -14,6 +17,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ImportRuntimeHints;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -21,11 +25,20 @@ import org.springframework.transaction.PlatformTransactionManager;
 import javax.sql.DataSource;
 import java.util.Map;
 
+@ImportRuntimeHints(BatchApplication.Hints.class)
 @EnableJdbcJobRepository
 @SpringBootApplication
 public class BatchApplication extends JdbcDefaultBatchConfiguration {
 
 
+    static class Hints implements RuntimeHintsRegistrar {
+
+        @Override
+        public void registerHints(RuntimeHints hints, @Nullable ClassLoader classLoader) {
+            hints.resources().registerResource(IN );
+        }
+    }
+    
     public static void main(String[] args) {
         SpringApplication.run(BatchApplication.class, args);
     }
