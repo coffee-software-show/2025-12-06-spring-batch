@@ -4,89 +4,98 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.aot.hint.RuntimeHints;
 import org.springframework.aot.hint.RuntimeHintsRegistrar;
-import org.springframework.batch.core.configuration.annotation.EnableJdbcJobRepository;
-import org.springframework.batch.core.configuration.support.JdbcDefaultBatchConfiguration;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.job.parameters.RunIdIncrementer;
 import org.springframework.batch.core.repository.JobRepository;
+import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.builder.StepBuilder;
+import org.springframework.batch.infrastructure.item.ItemReader;
 import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.builder.FlatFileItemReaderBuilder;
-import org.springframework.boot.ApplicationRunner;
+import org.springframework.batch.infrastructure.repeat.RepeatStatus;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.batch.autoconfigure.JobExecutionEvent;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ImportRuntimeHints;
+import org.springframework.context.event.EventListener;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.core.task.VirtualThreadTaskExecutor;
 import org.springframework.transaction.PlatformTransactionManager;
 
-import javax.sql.DataSource;
-import java.util.Map;
-
 @ImportRuntimeHints(BatchApplication.Hints.class)
-@EnableJdbcJobRepository
 @SpringBootApplication
-public class BatchApplication extends JdbcDefaultBatchConfiguration {
+public class BatchApplication {
 
+    public static void main(String[] args) {
+        SpringApplication.run(BatchApplication.class, args);
+    }
+
+    @EventListener
+    void onApplicationEvent(JobExecutionEvent event) {
+        IO.println("the JobExecutionEvent received: " + event.getJobExecution().getId());
+    }
+
+    record Customer(int id, String name) {
+    }
+
+    static final Resource RESOURCE = new ClassPathResource("/customers.csv");
 
     static class Hints implements RuntimeHintsRegistrar {
 
         @Override
         public void registerHints(RuntimeHints hints, @Nullable ClassLoader classLoader) {
-            hints.resources().registerResource(IN );
+            hints.resources().registerResource(RESOURCE);
         }
     }
-    
-    public static void main(String[] args) {
-        SpringApplication.run(BatchApplication.class, args);
-    }
-
-
-    record Customer(int id, String name) {
-    }
-
-    static final Resource IN = new ClassPathResource("customers.csv");
 
     @Bean
     FlatFileItemReader<@NonNull Customer> reader() {
         return new FlatFileItemReaderBuilder<@NonNull Customer>()
-                .resource(IN)
-                .linesToSkip(1)
-                .delimited(c -> c.names("id,name".split(",")))
-                .name("customer")
+                .resource(RESOURCE)
                 .fieldSetMapper(fieldSet -> new Customer(fieldSet.readInt("id"), fieldSet.readString("name")))
+                .linesToSkip(1)
+                .name("reader")
+                .delimited(d -> d.names("id,name".split(",")))
                 .build();
     }
 
     @Bean
-    Job job(JobRepository repo, PlatformTransactionManager manager, FlatFileItemReader<@NonNull Customer> reader) {
-        return new JobBuilder("job", repo)
-                .start(new StepBuilder("s1", repo)
-                        .<Customer, Customer>chunk(10)
-                        .transactionManager(manager)
-                        .reader(reader)
-                        .writer(chunk -> chunk.forEach(IO::println))
-                        .build())
+    AsyncTaskExecutor taskExecutor() {
+        return new VirtualThreadTaskExecutor();
+    }
+
+    @Bean
+    Step step2(JobRepository repository, AsyncTaskExecutor taskExecutor, ItemReader<@NonNull Customer> customerItemReader, PlatformTransactionManager transactionManager) {
+        return new StepBuilder(repository)
+                .<Customer, Customer>chunk(10)
+                .transactionManager(transactionManager)
+                .reader(customerItemReader)
+                .writer(chunk -> chunk.forEach(IO::println))
+                .taskExecutor(taskExecutor)
+                .build();
+    }
+
+    @Bean
+    Step step1(JobRepository repository, PlatformTransactionManager transactionManager) {
+        return new StepBuilder(repository)
+                .tasklet((_, _) -> {
+                    IO.println("Hello World");
+                    return RepeatStatus.FINISHED;
+                }, transactionManager)
+                .build();
+    }
+
+    @Bean
+    Job job(JobRepository repository, Step step1, Step step2) {
+        return new JobBuilder(repository)
+                .start(step1)
+                .next(step2)
                 .incrementer(new RunIdIncrementer())
                 .build();
 
-    }
-
-    void enumerate(Map<String, ?> map) {
-        map.forEach((key, value) -> {
-            IO.println(key + ": " + value);
-        });
-    }
-
-    @Bean
-    ApplicationRunner runner(Map<String, DataSource> dataSources,
-                             Map<String, PlatformTransactionManager> transactionManagers
-    ) {
-        return args -> {
-            this.enumerate(dataSources);
-            this.enumerate(transactionManagers);
-        };
     }
 }
